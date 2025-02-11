@@ -185,31 +185,6 @@ class DatabaseApp:
         )
         title_label.pack(pady=(20, 10))
 
-        # Search bar
-        search_frame = ttk.Frame(self.client_frame)
-        search_frame.pack(fill=tk.X, pady=10)
-
-        search_button = ttk.Button(
-            search_frame,
-            text="Buscar",
-            command=self.filter_data,
-            bootstyle="info-outline"
-        )
-        search_button.pack(side=tk.RIGHT, padx=5)
-
-        self.search_entry = ttk.Entry(search_frame, width=20)
-        self.search_entry.pack(side=tk.RIGHT, padx=5)
-        self.search_entry.bind("<KeyRelease>", self.filter_data)
-
-        #Barra de Pesquisa
-        search_label = ttk.Label(
-            search_frame, 
-            text="Pesquisar:", 
-            font=("Helvetica", 10, "bold"), 
-            foreground=self.config.TEXT_COLOR
-        )
-        search_label.pack(side=tk.RIGHT, padx=5)
-
         # Treeview
         self.tree = ttk.Treeview(
             self.client_frame,
@@ -220,10 +195,10 @@ class DatabaseApp:
         # Configure headings
         client_headings = {
             "ID": {"width": 100, "anchor": "center"},
-            "Nome": {"width": 120, "anchor": "w"},
-            "Email": {"width": 120, "anchor": "w"},
+            "Nome": {"width": 150, "anchor": "center"},
+            "Email": {"width": 200, "anchor": "center"},
             "Telefone": {"width": 120, "anchor": "center"},
-            "Observação": {"width": 120, "anchor": "w"},
+            "Observação": {"width": 200, "anchor": "w"},
             "Data de Cadastro": {"width": 120, "anchor": "center"}
         }
 
@@ -271,15 +246,14 @@ class DatabaseApp:
         # Treeview
         self.budget_tree = ttk.Treeview(
             self.budget_frame,
-            columns=("ID", "Nome", "Email", "Data", "Tipo", "Previsão de Conclusão", "Prazo", "Serviço"),
+            columns=("ID", "ID do Cliente", "Data", "Tipo", "Previsão de Conclusão", "Prazo", "Serviço"),
             show="headings"
         )
         
         # Configure headings
         budget_headings = {
             "ID": {"width": 100, "anchor": "center"},
-            "Nome": {"width": 150, "anchor": "w"},
-            "Email": {"width": 150, "anchor": "w"},
+            "ID do Cliente": {"width": 150, "anchor": "center"},
             "Data": {"width": 120, "anchor": "center"},
             "Tipo": {"width": 120, "anchor": "w"},
             "Previsão de Conclusão": {"width": 150, "anchor": "center"},
@@ -625,13 +599,12 @@ class DatabaseApp:
         entry.delete(0, tk.END)
         entry.insert(0, formatted_phone)
 
-    def open_add_budget_dialog(self):
+    def open_add_budget_dialog(self, client_id=None):
         dialog = self.create_dialog(self.root, "Adicionar Orçamento")
 
         # Create entry fields
         entries = {
-            "Nome:": "Digite o nome",
-            "Email:": "Digite o email",
+            "ID do Cliente:": client_id if client_id else "Digite o ID do cliente",
             "Tipo:": "Selecione o tipo",
             "Previsão de Conclusão:": "Selecione a data",
             "Prazo:": "Digite o prazo",
@@ -655,21 +628,15 @@ class DatabaseApp:
             entry_widgets[label_text] = entry
 
         def save_budget():
-            name = entry_widgets["Nome:"].get()
-            email = entry_widgets["Email:"].get()
+            client_id = entry_widgets["ID do Cliente:"].get()
             budget_type = entry_widgets["Tipo:"].get()
             completion = entry_widgets["Previsão de Conclusão:"].get()
             deadline = entry_widgets["Prazo:"].get()
             service = entry_widgets["Serviço:"].get()
 
-            if name == "Digite o nome" or not name:
-                messagebox.showwarning("Aviso", "O campo nome é obrigatório!")
-                entry_widgets["Nome:"].config(bootstyle="danger")
-                return
-
-            if email != "Digite o email" and not DataValidator.validate_email(email):
-                messagebox.showwarning("Aviso", "Email inválido!")
-                entry_widgets["Email:"].config(bootstyle="danger")
+            if client_id == "Digite o ID do cliente" or not client_id:
+                messagebox.showwarning("Aviso", "O campo ID do cliente é obrigatório!")
+                entry_widgets["ID do Cliente:"].config(bootstyle="danger")
                 return
 
             budget_id = self.generate_budget_id()
@@ -679,14 +646,13 @@ class DatabaseApp:
                 with self.db_manager.get_connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute("""
-                        INSERT INTO budgets (budget_id, name, email, date, type, completion, deadline, service)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (budget_id, name, email, date_added, budget_type, completion, deadline, service))
-                    
+                        INSERT INTO budgets (budget_id, client_id, date, type, completion, deadline, service)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (budget_id, client_id, date_added, budget_type, completion, deadline, service))
                     conn.commit()
-                    self.load_budget_data()
-                    messagebox.showinfo("Sucesso", "Orçamento adicionado com sucesso!")
-                    dialog.destroy()
+                self.load_budget_data()
+                messagebox.showinfo("Sucesso", "Orçamento adicionado com sucesso!")
+                dialog.destroy()
             except Exception as e:
                 logging.error(f"Error saving budget: {e}")
                 messagebox.showerror("Erro", f"Erro ao salvar orçamento: {e}")
@@ -739,7 +705,7 @@ class DatabaseApp:
         try:
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT budget_id, name, email, date, type, completion, deadline, service FROM budgets")
+                cursor.execute("SELECT budget_id, client_id, date, type, completion, deadline, service FROM budgets")
                 for row in cursor.fetchall():
                     self.budget_tree.insert("", tk.END, values=row)
         except Exception as e:
@@ -904,6 +870,17 @@ class DatabaseApp:
             command=dialog.destroy,
             bootstyle="danger-outline"
         ).pack(side=tk.RIGHT, padx=5)
+
+    def open_add_budget_from_client(self):
+        selected_item = self.tree.selection()
+        if not selected_item:
+            messagebox.showwarning("Aviso", "Selecione um cliente para adicionar orçamento.")
+            return
+
+        item = self.tree.item(selected_item)
+        client_id = item['values'][0]
+
+        self.open_add_budget_dialog(client_id)
 
 def main():
     """Main application entry point"""
