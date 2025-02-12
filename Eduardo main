@@ -794,12 +794,11 @@ class DatabaseApp:
 
         # Create entry fields
         entries = {
-            "Nome:": item['values'][1],
-            "Email:": item['values'][2],
-            "Tipo:": item['values'][4],
-            "Previsão de Conclusão:": item['values'][5],
-            "Prazo:": item['values'][6],
-            "Serviço:": item['values'][7]
+            "ID do Cliente:": item['values'][1],
+            "Tipo:": item['values'][3],
+            "Previsão de Conclusão:": item['values'][4],
+            "Prazo:": item['values'][5],
+            "Serviço:": item['values'][6]
         }
 
         entry_widgets = {}
@@ -819,21 +818,15 @@ class DatabaseApp:
             entry_widgets[label_text] = entry
 
         def save_budget():
-            name = entry_widgets["Nome:"].get()
-            email = entry_widgets["Email:"].get()
+            client_id = entry_widgets["ID do Cliente:"].get()
             budget_type = entry_widgets["Tipo:"].get()
             completion = entry_widgets["Previsão de Conclusão:"].get()
             deadline = entry_widgets["Prazo:"].get()
             service = entry_widgets["Serviço:"].get()
 
-            if name == "Digite o nome" or not name:
-                messagebox.showwarning("Aviso", "O campo nome é obrigatório!")
-                entry_widgets["Nome:"].config(bootstyle="danger")
-                return
-
-            if email != "Digite o email" and not DataValidator.validate_email(email):
-                messagebox.showwarning("Aviso", "Email inválido!")
-                entry_widgets["Email:"].config(bootstyle="danger")
+            if client_id == "Digite o ID do cliente" or not client_id:
+                messagebox.showwarning("Aviso", "O campo ID do cliente é obrigatório!")
+                entry_widgets["ID do Cliente:"].config(bootstyle="danger")
                 return
 
             try:
@@ -841,9 +834,9 @@ class DatabaseApp:
                     cursor = conn.cursor()
                     cursor.execute("""
                         UPDATE budgets
-                        SET name=?, email=?, type=?, completion=?, deadline=?, service=?
+                        SET client_id=?, type=?, completion=?, deadline=?, service=?
                         WHERE budget_id=?
-                    """, (name, email, budget_type, completion, deadline, service, budget_id))
+                    """, (client_id, budget_type, completion, deadline, service, budget_id))
                     
                     conn.commit()
                     self.load_budget_data()
