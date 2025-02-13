@@ -133,7 +133,6 @@ class DatabaseApp:
         # Initialize components
         self.init_database()
         self.init_ui()
-        self.load_data()
         
         # Setup closing protocol
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -174,6 +173,10 @@ class DatabaseApp:
         self.init_budget_ui()
         self.init_contract_services_ui()
         self.init_service_registration_ui()
+
+        # Load data
+        self.load_data()
+        self.load_budget_data()
 
     def init_client_ui(self):
         # Title
@@ -807,13 +810,13 @@ class DatabaseApp:
                 dialog,
                 text=label_text,
                 font=("Helvetica", 10, "bold"),
-                foreground=self.config.TEXT_COLOR,
+                foreground=self.config.TEXT_COLOR2,
                 background=self.config.BACKGROUND_COLOR
             ).pack(pady=5)
             
             entry = ttk.Entry(dialog)
             entry.pack(pady=5)
-            entry.configure(background=self.config.ENTRY_BACKGROUND)
+            entry.configure(background=self.config.ENTRY_BACKGROUND, foreground=self.config.TEXT_COLOR2)
             entry.insert(0, value)
             entry_widgets[label_text] = entry
 
