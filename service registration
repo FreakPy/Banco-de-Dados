@@ -1,0 +1,407 @@
+import tkinter as tk
+from tkinter import messagebox, simpledialog
+import ttkbootstrap as ttk
+from ttkbootstrap.constants import *
+import logging
+
+class UIConfig:
+    BACKGROUND_COLOR = "#FFFFFF"
+    PLACEHOLDER_COLOR = "#A9A9A9"
+    TEXT_COLOR = "#000000"
+    TEXT_COLOR2 = "#333333"
+    ENTRY_BACKGROUND = "#F0F0F0"
+    ENTRY_TEXT_COLOR = "#FFFFFF"  # Cor do texto de entrada
+
+class ServiceRegistrationManager:
+    def __init__(self, db_manager, config):
+        self.db_manager = db_manager
+        self.config = config
+        self.service_types = [
+            "Artigo", "Dissertação", "Referências ABNT", "Referências APA",
+            "Referências Vancouver", "Referências AMA", "Revisão Inglês", "Revisão Espanhol", "Novo Serviço"
+        ]
+
+    def init_service_registration_ui(self, notebook):
+        self.service_registration_frame = ttk.Frame(notebook)
+        notebook.add(self.service_registration_frame, text="Cadastro de Serviços")
+
+        # Title
+        title_label = ttk.Label(
+            self.service_registration_frame, 
+            text="Cadastro de Serviços", 
+            font=("Helvetica", 16, "bold"), 
+            foreground=self.config.TEXT_COLOR
+        )
+        title_label.pack(pady=(20, 10))
+
+        # Treeview
+        self.service_tree = ttk.Treeview(
+            self.service_registration_frame,
+            columns=("Nome do Serviço", "Unidade", "Preço", "Tipo de Serviço"),
+            show="headings"
+        )
+        
+        # Configure headings
+        service_headings = {
+            "Nome do Serviço": {"width": 150, "anchor": "center"},
+            "Unidade": {"width": 100, "anchor": "center"},
+            "Preço": {"width": 120, "anchor": "center"},
+            "Tipo de Serviço": {"width": 150, "anchor": "center"}
+        }
+
+        for col, props in service_headings.items():
+            self.service_tree.heading(col, text=col, anchor=props["anchor"])
+            self.service_tree.column(col, width=props["width"], anchor=props["anchor"])
+
+        # Scrollbar
+        service_scrollbar = ttk.Scrollbar(self.service_registration_frame, orient=tk.VERTICAL, command=self.service_tree.yview)
+        self.service_tree.configure(yscroll=service_scrollbar.set)
+        service_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.service_tree.pack(fill=tk.BOTH, expand=True)
+
+        # Buttons frame
+        service_button_frame = ttk.Frame(self.service_registration_frame)
+        service_button_frame.pack(fill=tk.X, pady=10)
+
+        # Buttons
+        service_buttons = [
+            ("Adicionar", "success-outline", self.open_add_service_dialog),
+            ("Editar", "warning-outline", self.open_edit_service_dialog),
+            ("Excluir", "danger-outline", self.delete_service_record),
+            ("Recarregar", "info-outline", self.load_service_data),
+            ("Gerenciar Tipos de Serviço", "primary-outline", self.manage_service_types)
+        ]
+
+        for text, style, command in service_buttons:
+            btn = ttk.Button(
+                service_button_frame,
+                text=text,
+                command=command,
+                bootstyle=style
+            )
+            btn.pack(side=tk.LEFT, padx=5, pady=2)
+
+    def open_add_service_dialog(self):
+        dialog = self.create_dialog(self.service_registration_frame, "Adicionar Serviço", geometry="400x450")
+
+        # Create entry fields
+        entries = {
+            "Nome do Serviço:": "Digite o nome do serviço",
+            "Unidade:": "Selecione a unidade",
+            "Preço:": "Digite o preço",
+            "Tipo de Serviço:": "Selecione o tipo de serviço"
+        }
+
+        entry_widgets = {}
+        for label_text, placeholder in entries.items():
+            ttk.Label(
+                dialog,
+                text=label_text,
+                font=("Helvetica", 10, "bold"),
+                foreground=self.config.TEXT_COLOR2,
+                background=self.config.BACKGROUND_COLOR
+            ).pack(pady=5)
+            
+            if label_text == "Unidade:":
+                entry = ttk.Combobox(dialog, values=["Por referência", "Por página"])
+                entry.pack(pady=5)
+                entry_widgets[label_text] = entry
+            elif label_text == "Preço:":
+                entry = ttk.Spinbox(dialog, from_=0, to=1000000, increment=0.01, format="%.2f")
+                entry.pack(pady=5)
+                entry.bind("<FocusOut>", self.format_currency)
+                entry_widgets[label_text] = entry
+            elif label_text == "Tipo de Serviço:":
+                entry = ttk.Combobox(dialog, values=self.service_types)
+                entry.pack(pady=5)
+                entry.bind("<<ComboboxSelected>>", lambda event: self.check_new_service(entry))
+                entry_widgets[label_text] = entry
+            else:
+                entry = ttk.Entry(dialog)
+                entry.pack(pady=5)
+                self.add_placeholder(entry, placeholder)
+                entry_widgets[label_text] = entry
+                # Adicionar evento para mudar a cor do texto quando o usuário começar a digitar
+                entry.bind("<KeyRelease>", lambda event: entry.config(foreground=UIConfig.ENTRY_TEXT_COLOR))
+
+        def save_service():
+            service_name = entry_widgets["Nome do Serviço:"].get()
+            unit = entry_widgets["Unidade:"].get()
+            price = entry_widgets["Preço:"].get()
+            service_type = entry_widgets["Tipo de Serviço:"].get()
+
+            if service_name == "Digite o nome do serviço" or not service_name:
+                messagebox.showwarning("Aviso", "O campo Nome do Serviço é obrigatório!")
+                entry_widgets["Nome do Serviço:"].config(bootstyle="danger")
+                return
+
+            if service_type == "Novo Serviço":
+                messagebox.showwarning("Aviso", "O campo Tipo de Serviço não pode ser 'Novo Serviço'!")
+                entry_widgets["Tipo de Serviço:"].config(bootstyle="danger")
+                return
+
+            try:
+                with self.db_manager.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        INSERT INTO services (name, unit, price, service_type)
+                        VALUES (?, ?, ?, ?)
+                    """, (service_name, unit, price, service_type))
+                    conn.commit()
+                self.load_service_data()
+                messagebox.showinfo("Sucesso", "Serviço adicionado com sucesso!")
+                dialog.destroy()
+            except Exception as e:
+                logging.error(f"Error saving service: {e}")
+                messagebox.showerror("Erro", f"Erro ao salvar serviço: {e}")
+
+        # Button frame
+        button_frame = ttk.Frame(dialog)
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=10, padx=10)
+
+        ttk.Button(
+            button_frame,
+            text="Salvar",
+            command=save_service,
+            bootstyle="success-outline"
+        ).pack(side=tk.RIGHT, padx=5)
+
+        ttk.Button(
+            button_frame,
+            text="Cancelar",
+            command=dialog.destroy,
+            bootstyle="danger-outline"
+        ).pack(side=tk.RIGHT, padx=5)
+
+    def check_new_service(self, combobox):
+        if combobox.get() == "Novo Serviço":
+            new_service = simpledialog.askstring("Novo Serviço", "Digite o nome do novo serviço:")
+            if new_service:
+                self.service_types.insert(-1, new_service)
+                combobox['values'] = self.service_types
+                combobox.set(new_service)
+
+    def format_currency(self, event):
+        entry = event.widget
+        value = entry.get().replace("R$", "").replace(",", "").strip()
+        try:
+            value = float(value)
+            entry.delete(0, tk.END)
+            entry.insert(0, f"R$ {value:,.2f}")
+        except ValueError:
+            entry.delete(0, tk.END)
+            entry.insert(0, "R$ 0,00")
+
+    def open_edit_service_dialog(self):
+        selected_item = self.service_tree.selection()
+        if not selected_item:
+            messagebox.showwarning("Aviso", "Selecione um serviço para editar.")
+            return
+
+        item = self.service_tree.item(selected_item)
+        service_id = item['values'][0]
+
+        dialog = self.create_dialog(self.service_registration_frame, "Editar Serviço", geometry="400x450")
+
+        # Create entry fields
+        entries = {
+            "Nome do Serviço:": item['values'][0],
+            "Unidade:": item['values'][1],
+            "Preço:": item['values'][2],
+            "Tipo de Serviço:": item['values'][3]
+        }
+
+        entry_widgets = {}
+        for label_text, value in entries.items():
+            ttk.Label(
+                dialog,
+                text=label_text,
+                font=("Helvetica", 10, "bold"),
+                foreground=self.config.TEXT_COLOR2,
+                background=self.config.BACKGROUND_COLOR
+            ).pack(pady=5)
+            
+            if label_text == "Unidade:":
+                entry = ttk.Combobox(dialog, values=["Por referência", "Por página"])
+                entry.pack(pady=5)
+                entry.set(value)
+                entry_widgets[label_text] = entry
+            elif label_text == "Preço:":
+                entry = ttk.Spinbox(dialog, from_=0, to=1000000, increment=0.01, format="%.2f")
+                entry.pack(pady=5)
+                entry.set(value)
+                entry.bind("<FocusOut>", self.format_currency)
+                entry_widgets[label_text] = entry
+            elif label_text == "Tipo de Serviço:":
+                entry = ttk.Combobox(dialog, values=self.service_types)
+                entry.pack(pady=5)
+                entry.set(value)
+                entry.bind("<<ComboboxSelected>>", lambda event: self.check_new_service(entry))
+                entry_widgets[label_text] = entry
+            else:
+                entry = ttk.Entry(dialog)
+                entry.pack(pady=5)
+                entry.insert(0, value)
+                entry_widgets[label_text] = entry
+
+        def save_service():
+            service_name = entry_widgets["Nome do Serviço:"].get()
+            unit = entry_widgets["Unidade:"].get()
+            price = entry_widgets["Preço:"].get()
+            service_type = entry_widgets["Tipo de Serviço:"].get()
+
+            if service_name == "Digite o nome do serviço" or not service_name:
+                messagebox.showwarning("Aviso", "O campo Nome do Serviço é obrigatório!")
+                entry_widgets["Nome do Serviço:"].config(bootstyle="danger")
+                return
+
+            if service_type == "Novo Serviço":
+                messagebox.showwarning("Aviso", "O campo Tipo de Serviço não pode ser 'Novo Serviço'!")
+                entry_widgets["Tipo de Serviço:"].config(bootstyle="danger")
+                return
+
+            try:
+                with self.db_manager.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        UPDATE services
+                        SET name=?, unit=?, price=?, service_type=?
+                        WHERE id=?
+                    """, (service_name, unit, price, service_type, service_id))
+                    conn.commit()
+                self.load_service_data()
+                messagebox.showinfo("Sucesso", "Serviço atualizado com sucesso!")
+                dialog.destroy()
+            except Exception as e:
+                logging.error(f"Error updating service: {e}")
+                messagebox.showerror("Erro", f"Erro ao atualizar serviço: {e}")
+
+        # Button frame
+        button_frame = ttk.Frame(dialog)
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=10, padx=10)
+
+        ttk.Button(
+            button_frame,
+            text="Salvar",
+            command=save_service,
+            bootstyle="success-outline"
+        ).pack(side=tk.RIGHT, padx=5)
+
+        ttk.Button(
+            button_frame,
+            text="Cancelar",
+            command=dialog.destroy,
+            bootstyle="danger-outline"
+        ).pack(side=tk.RIGHT, padx=5)
+
+    def delete_service_record(self):
+        selected_item = self.service_tree.selection()
+        if not selected_item:
+            messagebox.showwarning("Aviso", "Selecione um serviço para excluir.")
+            return
+
+        item = self.service_tree.item(selected_item)
+        service_id = item['values'][0]
+
+        confirm = messagebox.askyesno("Confirmação", "Tem certeza que deseja excluir este serviço?")
+        if confirm:
+            try:
+                with self.db_manager.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM services WHERE id=?", (service_id,))
+                    conn.commit()
+                self.load_service_data()
+                messagebox.showinfo("Sucesso", "Serviço excluído com sucesso!")
+            except Exception as e:
+                logging.error(f"Error deleting service: {e}")
+                messagebox.showerror("Erro", f"Erro ao excluir serviço: {e}")
+
+    def load_service_data(self):
+        """Load service data from database into treeview"""
+        for item in self.service_tree.get_children():
+            self.service_tree.delete(item)
+
+        try:
+            with self.db_manager.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT name, unit, price, service_type FROM services")
+                for row in cursor.fetchall():
+                    self.service_tree.insert("", tk.END, values=row)
+        except Exception as e:
+            logging.error(f"Error loading service data: {e}")
+            messagebox.showerror("Erro", f"Erro ao carregar dados de serviços: {e}")
+
+    def manage_service_types(self):
+        dialog = self.create_dialog(self.service_registration_frame, "Gerenciar Tipos de Serviço", geometry="400x300")
+
+        listbox = tk.Listbox(dialog, selectmode=tk.SINGLE)
+        listbox.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        for service_type in self.service_types[:-1]:  # Exclude "Novo Serviço"
+            listbox.insert(tk.END, service_type)
+
+        def add_service_type():
+            new_service = simpledialog.askstring("Novo Serviço", "Digite o nome do novo serviço:")
+            if new_service:
+                self.service_types.insert(-1, new_service)
+                listbox.insert(tk.END, new_service)
+
+        def remove_service_type():
+            selected_index = listbox.curselection()
+            if selected_index:
+                service_type = listbox.get(selected_index)
+                if service_type != "Novo Serviço":
+                    self.service_types.remove(service_type)
+                    listbox.delete(selected_index)
+
+        button_frame = ttk.Frame(dialog)
+        button_frame.pack(fill=tk.X, pady=10)
+
+        ttk.Button(
+            button_frame,
+            text="Adicionar",
+            command=add_service_type,
+            bootstyle="success-outline"
+        ).pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(
+            button_frame,
+            text="Remover",
+            command=remove_service_type,
+            bootstyle="danger-outline"
+        ).pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(
+            button_frame,
+            text="Fechar",
+            command=dialog.destroy,
+            bootstyle="primary-outline"
+        ).pack(side=tk.RIGHT, padx=5)
+
+    @staticmethod
+    def create_dialog(parent: tk.Tk, title: str, geometry: str = "400x450") -> tk.Toplevel:
+        """Create a standard dialog window"""
+        dialog = tk.Toplevel(parent)
+        dialog.title(title)
+        dialog.geometry(geometry)
+        dialog.configure(bg=UIConfig.BACKGROUND_COLOR)
+        return dialog
+
+    @staticmethod
+    def add_placeholder(entry: ttk.Entry, placeholder: str) -> None:
+        """Add placeholder text to entry widget"""
+        entry.insert(0, placeholder)
+        entry.config(foreground=UIConfig.PLACEHOLDER_COLOR)
+        
+        def on_focus_in(event):
+            if entry.get() == placeholder:
+                entry.delete(0, tk.END)
+                entry.config(foreground=UIConfig.TEXT_COLOR)
+        
+        def on_focus_out(event):
+            if not entry.get():
+                entry.insert(0, placeholder)
+                entry.config(foreground=UIConfig.PLACEHOLDER_COLOR)
+
+        entry.bind("<FocusIn>", on_focus_in)
+        entry.bind("<FocusOut>", on_focus_out)
