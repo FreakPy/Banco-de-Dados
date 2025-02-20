@@ -10,6 +10,8 @@ import logging
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Optional, Any
+from budget import DatabaseManager, BudgetManager, UIConfig
+from service_registration import ServiceRegistrationManager
 
 # Configure logging
 logging.basicConfig(
@@ -17,23 +19,6 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
     filename='app.log'
 )
-
-# Configuration class for UI constants
-@dataclass
-class UIConfig:
-    BACKGROUND_COLOR: str = "#FFFFFF"
-    BUTTON_COLOR: str = "#4CAF50"
-    BUTTON_HOVER_COLOR: str = "#45a049"
-    TEXT_COLOR: str = "#FFFFFF"
-    TEXT_COLOR2: str = "#000000"
-    PLACEHOLDER_COLOR: str = "#A9A9A9"
-    ENTRY_BACKGROUND: str = "#FFFFFF"
-    ENTRY_BORDER_COLOR: str = "#CCCCCC"
-    SELECTION_COLOR: str = "#4CAF50"
-    SELECTION_TEXT_COLOR: str = "#FFFFFF"
-    HEADER_BACKGROUND: str = "#f2f2f2"
-    HEADER_TEXT_COLOR: str = "#000000"
-    ERROR_COLOR: str = "#FF0000"
 
 # Custom exceptions
 class AppError(Exception):
@@ -48,57 +33,6 @@ class ValidationError(AppError):
     """Data validation errors"""
     pass
 
-# Database manager class
-class DatabaseManager:
-    def __init__(self, db_path: str = "database.db"):
-        self.db_path = db_path
-
-    @contextmanager
-    def get_connection(self):
-        conn = None
-        try:
-            conn = sqlite3.connect(self.db_path, timeout=30)
-            yield conn
-        finally:
-            if conn:
-                conn.close()
-
-    def init_database(self):
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''CREATE TABLE IF NOT EXISTS clients (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                client_id TEXT,
-                name TEXT,
-                email TEXT,
-                phone TEXT,
-                observation TEXT,
-                date_added TEXT)''')
-            
-            # Check and add columns if they don't exist
-            cursor.execute("PRAGMA table_info(clients)")
-            columns = [column[1] for column in cursor.fetchall()]
-            
-            if 'client_id' not in columns:
-                cursor.execute("ALTER TABLE clients ADD COLUMN client_id TEXT")
-            if 'date_added' not in columns:
-                cursor.execute("ALTER TABLE clients ADD COLUMN date_added TEXT")
-            
-            # Create budgets table
-            cursor.execute('''CREATE TABLE IF NOT EXISTS budgets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                budget_id TEXT,
-                name TEXT,
-                email TEXT,
-                date TEXT,
-                type TEXT,
-                completion TEXT,
-                deadline TEXT,
-                service TEXT)''')
-            
-            conn.commit()
-
-# Data validator class
 class DataValidator:
     EMAIL_REGEX = re.compile(r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$')
 
@@ -133,6 +67,7 @@ class DatabaseApp:
         # Initialize components
         self.init_database()
         self.init_ui()
+        self.load_data()
         
         # Setup closing protocol
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -140,10 +75,6 @@ class DatabaseApp:
     def generate_client_id(self) -> str:
         """Generate a secure random client ID"""
         return f"AUT-{secrets.randbelow(9000) + 1000}"
-    
-    def generate_budget_id(self) -> str:
-        """Generate a secure random budget ID"""
-        return f"ART-{secrets.randbelow(9000) + 1000}"
 
     def init_database(self):
         try:
@@ -158,25 +89,24 @@ class DatabaseApp:
 
         # Create frames
         self.client_frame = ttk.Frame(self.notebook)
-        self.budget_frame = ttk.Frame(self.notebook)
         self.contract_services_frame = ttk.Frame(self.notebook)
-        self.service_registration_frame = ttk.Frame(self.notebook)
 
         # Add frames to notebook
         self.notebook.add(self.client_frame, text="Cadastro de Clientes")
-        self.notebook.add(self.budget_frame, text="Orçamento")
+        
+        # Initialize budget manager
+        self.budget_manager = BudgetManager(self.db_manager, self.config)
+        self.budget_manager.init_budget_ui(self.notebook)
+        
         self.notebook.add(self.contract_services_frame, text="Serviços Contratados")
-        self.notebook.add(self.service_registration_frame, text="Cadastro de Serviços")
+
+        # Initialize service registration manager
+        self.service_registration_manager = ServiceRegistrationManager(self.db_manager, self.config)
+        self.service_registration_manager.init_service_registration_ui(self.notebook)
 
         # Initialize UI components
         self.init_client_ui()
-        self.init_budget_ui()
         self.init_contract_services_ui()
-        self.init_service_registration_ui()
-
-        # Load data
-        self.load_data()
-        self.load_budget_data()
 
     def init_client_ui(self):
         # Title
@@ -206,7 +136,7 @@ class DatabaseApp:
         }
 
         for col, props in client_headings.items():
-            self.tree.heading(col, text=col, anchor=props["anchor"])
+            self.tree.heading(col, text=col, anchor=props["anchor"], command=lambda _col=col: self.sort_by_column(_col, False))
             self.tree.column(col, width=props["width"], anchor=props["anchor"])
 
         # Scrollbar
@@ -236,64 +166,15 @@ class DatabaseApp:
             )
             btn.pack(side=tk.LEFT, padx=5, pady=2)
 
-    def init_budget_ui(self):
-        # Title
-        title_label = ttk.Label(
-            self.budget_frame, 
-            text="Orçamento", 
-            font=("Helvetica", 16, "bold"), 
-            foreground=self.config.TEXT_COLOR
-        )
-        title_label.pack(pady=(20, 10))
+    def sort_by_column(self, col, descending):
+        """Sort treeview column when a heading is clicked"""
+        data = [(self.tree.set(child, col), child) for child in self.tree.get_children('')]
+        data.sort(reverse=descending)
 
-        # Treeview
-        self.budget_tree = ttk.Treeview(
-            self.budget_frame,
-            columns=("ID", "ID do Cliente", "Data", "Tipo", "Previsão de Conclusão", "Prazo", "Serviço"),
-            show="headings"
-        )
-        
-        # Configure headings
-        budget_headings = {
-            "ID": {"width": 100, "anchor": "center"},
-            "ID do Cliente": {"width": 150, "anchor": "center"},
-            "Data": {"width": 120, "anchor": "center"},
-            "Tipo": {"width": 120, "anchor": "w"},
-            "Previsão de Conclusão": {"width": 150, "anchor": "center"},
-            "Prazo": {"width": 120, "anchor": "center"},
-            "Serviço": {"width": 150, "anchor": "w"}
-        }
+        for index, (val, child) in enumerate(data):
+            self.tree.move(child, '', index)
 
-        for col, props in budget_headings.items():
-            self.budget_tree.heading(col, text=col, anchor=props["anchor"])
-            self.budget_tree.column(col, width=props["width"], anchor=props["anchor"])
-
-        # Scrollbar
-        budget_scrollbar = ttk.Scrollbar(self.budget_frame, orient=tk.VERTICAL, command=self.budget_tree.yview)
-        self.budget_tree.configure(yscroll=budget_scrollbar.set)
-        budget_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.budget_tree.pack(fill=tk.BOTH, expand=True)
-
-        # Buttons frame
-        budget_button_frame = ttk.Frame(self.budget_frame)
-        budget_button_frame.pack(fill=tk.X, pady=10)
-
-        # Buttons
-        budget_buttons = [
-            ("Adicionar", "success-outline", self.open_add_budget_dialog),
-            ("Editar", "warning-outline", self.open_edit_budget_dialog),
-            ("Excluir", "danger-outline", self.delete_budget_record),
-            ("Recarregar", "info-outline", self.load_budget_data)
-        ]
-
-        for text, style, command in budget_buttons:
-            btn = ttk.Button(
-                budget_button_frame,
-                text=text,
-                command=command,
-                bootstyle=style
-            )
-            btn.pack(side=tk.LEFT, padx=5, pady=2)
+        self.tree.heading(col, command=lambda: self.sort_by_column(col, not descending))
 
     def init_contract_services_ui(self):
         # Title
@@ -305,15 +186,25 @@ class DatabaseApp:
         )
         title_label.pack(pady=(20, 10))
 
-    def init_service_registration_ui(self):
-        # Title
-        title_label = ttk.Label(
-            self.service_registration_frame, 
-            text="Cadastro de Serviços", 
-            font=("Helvetica", 16, "bold"), 
-            foreground=self.config.TEXT_COLOR
-        )
-        title_label.pack(pady=(20, 10))
+    def on_close(self):
+        """Handle application closing"""
+        if messagebox.askokcancel("Sair", "Deseja realmente sair?"):
+            self.root.destroy()
+
+    def load_data(self):
+        """Load client data from database into treeview"""
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        try:
+            with self.db_manager.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT client_id, name, email, phone, observation, date_added FROM clients")
+                for row in cursor.fetchall():
+                    self.tree.insert("", tk.END, values=row)
+        except Exception as e:
+            logging.error(f"Error loading client data: {e}")
+            messagebox.showerror("Erro", f"Erro ao carregar dados de clientes: {e}")
 
     def open_edit_client_dialog(self):
         selected_item = self.tree.selection()
@@ -602,119 +493,6 @@ class DatabaseApp:
         entry.delete(0, tk.END)
         entry.insert(0, formatted_phone)
 
-    def open_add_budget_dialog(self, client_id=None):
-        dialog = self.create_dialog(self.root, "Adicionar Orçamento")
-
-        # Create entry fields
-        entries = {
-            "ID do Cliente:": client_id if client_id else "Digite o ID do cliente",
-            "Tipo:": "Selecione o tipo",
-            "Previsão de Conclusão:": "Selecione a data",
-            "Prazo:": "Digite o prazo",
-            "Serviço:": "Selecione o serviço"
-        }
-
-        entry_widgets = {}
-        for label_text, placeholder in entries.items():
-            ttk.Label(
-                dialog,
-                text=label_text,
-                font=("Helvetica", 10, "bold"),
-                foreground=self.config.TEXT_COLOR2,
-                background=self.config.BACKGROUND_COLOR
-            ).pack(pady=5)
-            
-            entry = ttk.Entry(dialog)
-            entry.pack(pady=5)
-            entry.configure(background=self.config.ENTRY_BACKGROUND)
-            self.add_placeholder(entry, placeholder)
-            entry_widgets[label_text] = entry
-
-        def save_budget():
-            client_id = entry_widgets["ID do Cliente:"].get()
-            budget_type = entry_widgets["Tipo:"].get()
-            completion = entry_widgets["Previsão de Conclusão:"].get()
-            deadline = entry_widgets["Prazo:"].get()
-            service = entry_widgets["Serviço:"].get()
-
-            if client_id == "Digite o ID do cliente" or not client_id:
-                messagebox.showwarning("Aviso", "O campo ID do cliente é obrigatório!")
-                entry_widgets["ID do Cliente:"].config(bootstyle="danger")
-                return
-
-            budget_id = self.generate_budget_id()
-            date_added = datetime.now().strftime("%d/%m/%Y")
-
-            try:
-                with self.db_manager.get_connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        INSERT INTO budgets (budget_id, client_id, date, type, completion, deadline, service)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (budget_id, client_id, date_added, budget_type, completion, deadline, service))
-                    conn.commit()
-                self.load_budget_data()
-                messagebox.showinfo("Sucesso", "Orçamento adicionado com sucesso!")
-                dialog.destroy()
-            except Exception as e:
-                logging.error(f"Error saving budget: {e}")
-                messagebox.showerror("Erro", f"Erro ao salvar orçamento: {e}")
-
-        # Button frame
-        button_frame = ttk.Frame(dialog)
-        button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=10, padx=10)
-
-        ttk.Button(
-            button_frame,
-            text="Salvar",
-            command=save_budget,
-            bootstyle="success-outline"
-        ).pack(side=tk.RIGHT, padx=5)
-
-        ttk.Button(
-            button_frame,
-            text="Cancelar",
-            command=dialog.destroy,
-            bootstyle="danger-outline"
-        ).pack(side=tk.RIGHT, padx=5)
-
-    def delete_budget_record(self):
-        selected_item = self.budget_tree.selection()
-        if not selected_item:
-            messagebox.showwarning("Aviso", "Selecione um orçamento para excluir.")
-            return
-
-        item = self.budget_tree.item(selected_item)
-        budget_id = item['values'][0]
-
-        confirm = messagebox.askyesno("Confirmação", "Tem certeza que deseja excluir este orçamento?")
-        if confirm:
-            try:
-                with self.db_manager.get_connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("DELETE FROM budgets WHERE budget_id=?", (budget_id,))
-                    conn.commit()
-                self.load_budget_data()
-                messagebox.showinfo("Sucesso", "Orçamento excluído com sucesso!")
-            except Exception as e:
-                logging.error(f"Error deleting budget: {e}")
-                messagebox.showerror("Erro", f"Erro ao excluir orçamento: {e}")
-
-    def load_budget_data(self):
-        """Load budget data from database into treeview"""
-        for item in self.budget_tree.get_children():
-            self.budget_tree.delete(item)
-
-        try:
-            with self.db_manager.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT budget_id, client_id, date, type, completion, deadline, service FROM budgets")
-                for row in cursor.fetchall():
-                    self.budget_tree.insert("", tk.END, values=row)
-        except Exception as e:
-            logging.error(f"Error loading budget data: {e}")
-            messagebox.showerror("Erro", f"Erro ao carregar dados de orçamento: {e}")
-    
     def filter_data(self, event=None):
         """Filter data in treeview based on search entry"""
         search_term = self.search_entry.get().lower()
@@ -783,100 +561,6 @@ class DatabaseApp:
         except Exception as e:
             logging.error(f"Error loading client data: {e}")
             messagebox.showerror("Erro", f"Erro ao carregar dados de clientes: {e}")
-
-    def open_edit_budget_dialog(self):
-        selected_item = self.budget_tree.selection()
-        if not selected_item:
-            messagebox.showwarning("Aviso", "Selecione um orçamento para editar.")
-            return
-
-        item = self.budget_tree.item(selected_item)
-        budget_id = item['values'][0]
-
-        dialog = self.create_dialog(self.root, "Editar Orçamento")
-
-        # Create entry fields
-        entries = {
-            "ID do Cliente:": item['values'][1],
-            "Tipo:": item['values'][3],
-            "Previsão de Conclusão:": item['values'][4],
-            "Prazo:": item['values'][5],
-            "Serviço:": item['values'][6]
-        }
-
-        entry_widgets = {}
-        for label_text, value in entries.items():
-            ttk.Label(
-                dialog,
-                text=label_text,
-                font=("Helvetica", 10, "bold"),
-                foreground=self.config.TEXT_COLOR2,
-                background=self.config.BACKGROUND_COLOR
-            ).pack(pady=5)
-            
-            entry = ttk.Entry(dialog)
-            entry.pack(pady=5)
-            entry.configure(background=self.config.ENTRY_BACKGROUND, foreground=self.config.TEXT_COLOR2)
-            entry.insert(0, value)
-            entry_widgets[label_text] = entry
-
-        def save_budget():
-            client_id = entry_widgets["ID do Cliente:"].get()
-            budget_type = entry_widgets["Tipo:"].get()
-            completion = entry_widgets["Previsão de Conclusão:"].get()
-            deadline = entry_widgets["Prazo:"].get()
-            service = entry_widgets["Serviço:"].get()
-
-            if client_id == "Digite o ID do cliente" or not client_id:
-                messagebox.showwarning("Aviso", "O campo ID do cliente é obrigatório!")
-                entry_widgets["ID do Cliente:"].config(bootstyle="danger")
-                return
-
-            try:
-                with self.db_manager.get_connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        UPDATE budgets
-                        SET client_id=?, type=?, completion=?, deadline=?, service=?
-                        WHERE budget_id=?
-                    """, (client_id, budget_type, completion, deadline, service, budget_id))
-                    
-                    conn.commit()
-                    self.load_budget_data()
-                    messagebox.showinfo("Sucesso", "Orçamento atualizado com sucesso!")
-                    dialog.destroy()
-            except Exception as e:
-                logging.error(f"Error updating budget: {e}")
-                messagebox.showerror("Erro", f"Erro ao atualizar orçamento: {e}")
-
-        # Button frame
-        button_frame = ttk.Frame(dialog)
-        button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=10, padx=10)
-
-        ttk.Button(
-            button_frame,
-            text="Salvar",
-            command=save_budget,
-            bootstyle="success-outline"
-        ).pack(side=tk.RIGHT, padx=5)
-
-        ttk.Button(
-            button_frame,
-            text="Cancelar",
-            command=dialog.destroy,
-            bootstyle="danger-outline"
-        ).pack(side=tk.RIGHT, padx=5)
-
-    def open_add_budget_from_client(self):
-        selected_item = self.tree.selection()
-        if not selected_item:
-            messagebox.showwarning("Aviso", "Selecione um cliente para adicionar orçamento.")
-            return
-
-        item = self.tree.item(selected_item)
-        client_id = item['values'][0]
-
-        self.open_add_budget_dialog(client_id)
 
 def main():
     """Main application entry point"""
